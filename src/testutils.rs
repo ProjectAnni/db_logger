@@ -44,7 +44,7 @@ pub(crate) fn test_log_entries_individual(mut context: Box<dyn TestContext>) {
     #[tokio::main]
     async fn run(context: &mut dyn TestContext) {
         let entry1 = LogEntry {
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(1_000_001_001),
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(1_000_001_001).unwrap(),
             hostname: "fake-host1".to_owned(),
             level: log::Level::Error,
             module: None,
@@ -55,7 +55,7 @@ pub(crate) fn test_log_entries_individual(mut context: Box<dyn TestContext>) {
         context.db().put_log_entries(vec![entry1]).await.unwrap();
 
         let entry2 = LogEntry {
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(12_345_000_006_000),
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(12_345_000_006_000).unwrap(),
             hostname: "fake-host2".to_owned(),
             level: log::Level::Info,
             module: Some("the-module"),
@@ -78,7 +78,7 @@ pub(crate) fn test_log_entries_combined(mut context: Box<dyn TestContext>) {
     #[tokio::main]
     async fn run(context: &mut dyn TestContext) {
         let entry1 = LogEntry {
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(1_000_001_500),
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(1_000_001_500).unwrap(),
             hostname: "fake-host1".to_owned(),
             level: log::Level::Error,
             module: None,
@@ -88,7 +88,7 @@ pub(crate) fn test_log_entries_combined(mut context: Box<dyn TestContext>) {
         };
 
         let entry2 = LogEntry {
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(12_345_000_006_999),
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(12_345_000_006_999).unwrap(),
             hostname: "fake-host2".to_owned(),
             level: log::Level::Info,
             module: Some("the-module"),
@@ -116,7 +116,7 @@ pub(crate) fn test_log_entries_long_strings(mut context: Box<dyn TestContext>) {
         }
 
         let entry = LogEntry {
-            timestamp: OffsetDateTime::from_unix_timestamp(0),
+            timestamp: OffsetDateTime::from_unix_timestamp(0).unwrap(),
             hostname: long_string.to_owned(),
             level: log::Level::Trace,
             module: Some(&long_string),

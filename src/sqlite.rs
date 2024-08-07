@@ -90,7 +90,8 @@ impl Db for SqliteDb {
     async fn create_schema(&self) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         {
-            let mut results = sqlx::query(SCHEMA).execute_many(&mut tx).await;
+            #[allow(deprecated)]
+            let mut results = sqlx::query(SCHEMA).execute_many(&mut *tx).await;
             while results.try_next().await.map_err(|e| e.to_string())?.is_some() {
                 // Nothing to do.
             }

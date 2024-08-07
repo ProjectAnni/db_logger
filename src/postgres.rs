@@ -21,6 +21,7 @@ use crate::logger::{
 };
 use crate::{truncate_option_str, Connection, Db, Result};
 use futures::TryStreamExt;
+use sqlx::postgres::types::Oid;
 use sqlx::postgres::{PgConnectOptions, PgPool};
 use sqlx::Row;
 use std::convert::TryFrom;
@@ -134,11 +135,6 @@ pub fn connect_lazy(opts: ConnectionOptions) -> Connection {
     Connection(Arc::from(PostgresDb::connect_lazy(opts, None)))
 }
 
-/// Factory to connect to and initialize a PostgreSQL test database.
-pub async fn setup_test(opts: ConnectionOptions) -> Connection {
-    Connection(Arc::from(PostgresTestDb::setup_test(opts).await))
-}
-
 /// A database instance backed by a PostgreSQL database.
 #[derive(Clone)]
 struct PostgresDb {
@@ -181,7 +177,7 @@ impl Db for PostgresDb {
 
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         for query_str in schema.split(';') {
-            sqlx::query(query_str).execute(&mut tx).await.map_err(|e| e.to_string())?;
+            sqlx::query(query_str).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
         tx.commit().await.map_err(|e| e.to_string())
     }
@@ -246,7 +242,8 @@ impl Db for PostgresDb {
             query_str.push(')');
         }
 
-        let mut query = sqlx::query(&query_str);
+        let mut query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+            sqlx::query(&query_str);
         for mut entry in entries.into_iter() {
             let module = truncate_option_str(entry.module, LOG_ENTRY_MAX_MODULE_LENGTH);
             let filename = truncate_option_str(entry.filename, LOG_ENTRY_MAX_FILENAME_LENGTH);
@@ -260,7 +257,7 @@ impl Db for PostgresDb {
 
             query = query
                 .bind(entry.timestamp)
-                .bind(sequence)
+                .bind(Oid(sequence))
                 .bind(entry.hostname)
                 .bind(i16::try_from(entry.level as usize).expect("Levels must fit in u16"))
                 .bind(module)
@@ -283,79 +280,79 @@ impl Db for PostgresDb {
     }
 }
 
-/// A wrapper over `PostgresDb` to initialize and clean up a test database instance.
-///
-/// Instances of this object *must* be held on a non-async context without any async runtime
-/// because `drop` needs to enter a new runtime to clean up the database.
-#[derive(Clone)]
-struct PostgresTestDb(PostgresDb);
-
-impl PostgresTestDb {
-    /// Creates a new connection to the test database and initializes it.
-    ///
-    /// The caller must arrange to call `teardown_test` on its own as it is appropriate.  We do not
-    /// do this on `drop` due to the difficulties in handling this properly, because our code must
-    /// be async but the `Drop` trait is not.
-    ///
-    /// As this is only for testing, any errors result in a panic.
-    async fn setup_test(opts: ConnectionOptions) -> Self {
-        let db = PostgresDb::connect_lazy(opts, Some(rand::random()));
-        db.create_schema().await.unwrap();
-        PostgresTestDb(db)
-    }
-
-    /// Deletes the state created by `setup_test` and shuts the pool down.
-    ///
-    /// As this is only for testing, any errors result in a panic.  Attempting to use the database
-    /// after this has been called has undefined behavior.
-    async fn teardown_test(&self) {
-        let suffix = self.0.suffix.expect("This should only be called from tests");
-
-        // Do not use patch_query here: we must make sure the fake names cannot possibly match the
-        // values in production, and the extra `_` characters before the `{}` placeholders ensure
-        // that this is true.
-        let mut tx = self.0.pool.begin().await.unwrap();
-        for query_str in &[
-            format!("DROP INDEX logs_{}_by_timestamp", suffix),
-            format!("DROP TABLE logs_{}", suffix),
-        ] {
-            sqlx::query(query_str).execute(&mut tx).await.unwrap();
-        }
-        tx.commit().await.unwrap();
-
-        self.0.pool.close().await;
-    }
-}
-
-impl Drop for PostgresTestDb {
-    fn drop(&mut self) {
-        #[tokio::main]
-        async fn cleanup(context: &mut PostgresTestDb) {
-            context.teardown_test().await;
-        }
-        cleanup(self)
-    }
-}
-
-#[async_trait::async_trait]
-impl Db for PostgresTestDb {
-    async fn create_schema(&self) -> Result<()> {
-        self.0.create_schema().await
-    }
-
-    async fn get_log_entries(&self) -> Result<Vec<String>> {
-        self.0.get_log_entries().await
-    }
-
-    async fn put_log_entries(&self, entries: Vec<LogEntry<'_, '_>>) -> Result<()> {
-        self.0.put_log_entries(entries).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutils;
+
+    /// A wrapper over `PostgresDb` to initialize and clean up a test database instance.
+    ///
+    /// Instances of this object *must* be held on a non-async context without any async runtime
+    /// because `drop` needs to enter a new runtime to clean up the database.
+    #[derive(Clone)]
+    struct PostgresTestDb(PostgresDb);
+
+    impl PostgresTestDb {
+        /// Creates a new connection to the test database and initializes it.
+        ///
+        /// The caller must arrange to call `teardown_test` on its own as it is appropriate.  We do not
+        /// do this on `drop` due to the difficulties in handling this properly, because our code must
+        /// be async but the `Drop` trait is not.
+        ///
+        /// As this is only for testing, any errors result in a panic.
+        async fn setup_test(opts: ConnectionOptions) -> Self {
+            let db = PostgresDb::connect_lazy(opts, Some(rand::random()));
+            db.create_schema().await.unwrap();
+            PostgresTestDb(db)
+        }
+
+        /// Deletes the state created by `setup_test` and shuts the pool down.
+        ///
+        /// As this is only for testing, any errors result in a panic.  Attempting to use the database
+        /// after this has been called has undefined behavior.
+        async fn teardown_test(&self) {
+            let suffix = self.0.suffix.expect("This should only be called from tests");
+
+            // Do not use patch_query here: we must make sure the fake names cannot possibly match the
+            // values in production, and the extra `_` characters before the `{}` placeholders ensure
+            // that this is true.
+            let mut tx = self.0.pool.begin().await.unwrap();
+            for query_str in &[
+                format!("DROP INDEX logs_{}_by_timestamp", suffix),
+                format!("DROP TABLE logs_{}", suffix),
+            ] {
+                sqlx::query(query_str).execute(&mut *tx).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+
+            self.0.pool.close().await;
+        }
+    }
+
+    impl Drop for PostgresTestDb {
+        fn drop(&mut self) {
+            #[tokio::main]
+            async fn cleanup(context: &mut PostgresTestDb) {
+                context.teardown_test().await;
+            }
+            cleanup(self)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Db for PostgresTestDb {
+        async fn create_schema(&self) -> Result<()> {
+            self.0.create_schema().await
+        }
+
+        async fn get_log_entries(&self) -> Result<Vec<String>> {
+            self.0.get_log_entries().await
+        }
+
+        async fn put_log_entries(&self, entries: Vec<LogEntry<'_, '_>>) -> Result<()> {
+            self.0.put_log_entries(entries).await
+        }
+    }
 
     #[test]
     fn test_strip_sql_comments() {

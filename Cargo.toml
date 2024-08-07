@@ -21,8 +21,8 @@ futures = "0.3"
 gethostname = "0.2"
 log = "0.4"
 rand = "0.8"
-sqlx = { version = "0.5", features = ["runtime-async-std-rustls", "time"] }
-time = "0.2.16"
+sqlx = { version = "0.7", features = ["runtime-async-std-rustls", "time"] }
+time = "0.3"
 tokio = "1"
 
 [dev-dependencies]
