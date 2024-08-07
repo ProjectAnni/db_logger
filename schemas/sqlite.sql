@@ -13,7 +13,7 @@
 -- License for the specific language governing permissions and limitations
 -- under the License.
 
-CREATE TABLE logs (
+CREATE TABLE IF NOT EXISTS logs (
     timestamp_secs INTEGER NOT NULL,
     timestamp_nsecs INTEGER NOT NULL,
     sequence INTEGER NOT NULL,
@@ -30,4 +30,4 @@ CREATE TABLE logs (
     PRIMARY KEY (timestamp_secs, timestamp_nsecs, sequence, hostname)
 );
 
-CREATE INDEX logs_by_timestamp ON logs (timestamp_secs, timestamp_nsecs, sequence);
+CREATE INDEX IF NOT EXISTS logs_by_timestamp ON logs (timestamp_secs, timestamp_nsecs, sequence);
