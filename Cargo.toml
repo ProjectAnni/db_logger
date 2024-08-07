@@ -16,6 +16,7 @@ postgres = ["sqlx/postgres"]
 sqlite = ["sqlx/sqlite"]
 
 [dependencies]
+anyhow = "1.0.86"
 async-trait = "0.1"
 futures = "0.3"
 gethostname = "0.2"

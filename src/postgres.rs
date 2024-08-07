@@ -111,10 +111,10 @@ impl ConnectionOptions {
             match env::var(&name) {
                 Ok(value) => Ok(value),
                 Err(env::VarError::NotPresent) => {
-                    Err(format!("Required environment variable {} not present", name))
+                    Err(anyhow::anyhow!("Required environment variable {} not present", name))
                 }
                 Err(env::VarError::NotUnicode(_)) => {
-                    Err(format!("Invalid value in environment variable {}", name))
+                    Err(anyhow::anyhow!("Invalid value in environment variable {}", name))
                 }
             }
         }
@@ -122,7 +122,7 @@ impl ConnectionOptions {
             host: get_required_var(prefix, "HOST")?,
             port: get_required_var(prefix, "PORT")?
                 .parse::<u16>()
-                .map_err(|e| format!("Invalid port number: {}", e))?,
+                .map_err(|e| anyhow::anyhow!("Invalid port number: {}", e))?,
             database: get_required_var(prefix, "DATABASE")?,
             username: get_required_var(prefix, "USERNAME")?,
             password: get_required_var(prefix, "PASSWORD")?,
@@ -175,25 +175,25 @@ impl Db for PostgresDb {
     async fn create_schema(&self) -> Result<()> {
         let schema = self.patch_query(&strip_sql_comments(SCHEMA));
 
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let mut tx = self.pool.begin().await?;
         for query_str in schema.split(';') {
-            sqlx::query(query_str).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            sqlx::query(query_str).execute(&mut *tx).await?;
         }
-        tx.commit().await.map_err(|e| e.to_string())
+        Ok(tx.commit().await?)
     }
 
     async fn get_log_entries(&self) -> Result<Vec<String>> {
         let query_str = self.patch_query("SELECT * FROM logs ORDER BY timestamp, sequence");
         let mut rows = sqlx::query(&query_str).fetch(&self.pool);
         let mut entries = vec![];
-        while let Some(row) = rows.try_next().await.map_err(|e| e.to_string())? {
-            let timestamp: OffsetDateTime = row.try_get("timestamp").map_err(|e| e.to_string())?;
-            let hostname: String = row.try_get("hostname").map_err(|e| e.to_string())?;
-            let level: i16 = row.try_get("level").map_err(|e| e.to_string())?;
-            let module: Option<String> = row.try_get("module").map_err(|e| e.to_string())?;
-            let filename: Option<String> = row.try_get("filename").map_err(|e| e.to_string())?;
-            let line: Option<i16> = row.try_get("line").map_err(|e| e.to_string())?;
-            let message: String = row.try_get("message").map_err(|e| e.to_string())?;
+        while let Some(row) = rows.try_next().await? {
+            let timestamp: OffsetDateTime = row.try_get("timestamp")?;
+            let hostname: String = row.try_get("hostname")?;
+            let level: i16 = row.try_get("level")?;
+            let module: Option<String> = row.try_get("module")?;
+            let filename: Option<String> = row.try_get("filename")?;
+            let line: Option<i16> = row.try_get("line")?;
+            let message: String = row.try_get("message")?;
 
             entries.push(format!(
                 "{}.{} {} {} {} {}:{} {}",
@@ -211,8 +211,9 @@ impl Db for PostgresDb {
     }
 
     async fn put_log_entries(&self, entries: Vec<LogEntry<'_, '_>>) -> Result<()> {
-        let nentries = u32::try_from(entries.len())
-            .map_err(|e| format!("Cannot insert {} log entries at once: {}", entries.len(), e))?;
+        let nentries = u32::try_from(entries.len()).map_err(|e| {
+            anyhow::anyhow!("Cannot insert {} log entries at once: {}", entries.len(), e)
+        })?;
         if nentries == 0 {
             return Ok(());
         }
@@ -251,7 +252,9 @@ impl Db for PostgresDb {
             entry.message.truncate(LOG_ENTRY_MAX_MESSAGE_LENGTH);
 
             let line = match entry.line {
-                Some(n) => Some(i16::try_from(n).map_err(|_| "line out of range".to_owned())?),
+                Some(n) => {
+                    Some(i16::try_from(n).map_err(|_| anyhow::anyhow!("line out of range"))?)
+                }
                 None => None,
             };
 
@@ -268,9 +271,9 @@ impl Db for PostgresDb {
             sequence += 1;
         }
 
-        let done = query.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        let done = query.execute(&self.pool).await?;
         if done.rows_affected() != u64::from(nentries) {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "Log entries insertion created {} rows but expected {}",
                 done.rows_affected(),
                 nentries
@@ -403,7 +406,9 @@ mod tests {
         }
         match ConnectionOptions::from_env(&prefix) {
             Ok(_) => panic!("Should have failed"),
-            Err(e) => assert!(e.contains(&format!("{}_{} not present", prefix, missing))),
+            Err(e) => {
+                assert!(e.to_string().contains(&format!("{}_{} not present", prefix, missing)))
+            }
         }
     }
 
@@ -442,7 +447,7 @@ mod tests {
         env::set_var(format!("{}_PASSWORD", prefix), "password");
         match ConnectionOptions::from_env(&prefix) {
             Ok(_) => panic!("Should have failed"),
-            Err(e) => assert!(e.contains("Invalid port number")),
+            Err(e) => assert!(e.to_string().contains("Invalid port number")),
         }
     }
 

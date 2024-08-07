@@ -51,7 +51,7 @@ impl Connection {
 }
 
 /// Result type for this library.
-pub(crate) type Result<T> = std::result::Result<T, String>;
+pub use anyhow::Result;
 
 /// Abstraction over the database connection.
 #[async_trait::async_trait]

@@ -21,7 +21,7 @@ use crate::logger::{
 };
 use crate::{truncate_option_str, Connection, Db, Result};
 use futures::TryStreamExt;
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::Row;
 use std::convert::TryFrom;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -57,7 +57,8 @@ fn unpack_timestamp(ts: OffsetDateTime) -> Result<(i64, i64)> {
         nanos += 1000;
     }
 
-    let sec = i64::try_from(nanos / 1_000_000_000).map_err(|_| "timestamp too large".to_owned())?;
+    let sec =
+        i64::try_from(nanos / 1_000_000_000).map_err(|_| anyhow::anyhow!("timestamp too large"))?;
     let nsec = i64::try_from(nanos % 1_000_000_000).expect("nanos must fit in i64");
     Ok((sec, nsec))
 }
@@ -73,7 +74,7 @@ struct SqliteDb {
 impl SqliteDb {
     /// Creates a new connection based on environment variables and initializes its schema.
     async fn connect(opts: ConnectionOptions) -> Result<Self> {
-        let pool = SqlitePool::connect(&opts.uri).await.map_err(|e| e.to_string())?;
+        let pool = SqlitePool::connect_with(SqliteConnectOptions::new().create_if_missing(true).filename(opts.uri)).await?;
 
         // Serialize all transactions onto the SQLite database to avoid busy errors that we cannot
         // easily deal with during tests.
@@ -88,15 +89,15 @@ impl SqliteDb {
 #[async_trait::async_trait]
 impl Db for SqliteDb {
     async fn create_schema(&self) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let mut tx = self.pool.begin().await?;
         {
             #[allow(deprecated)]
             let mut results = sqlx::query(SCHEMA).execute_many(&mut *tx).await;
-            while results.try_next().await.map_err(|e| e.to_string())?.is_some() {
+            while results.try_next().await?.is_some() {
                 // Nothing to do.
             }
         }
-        tx.commit().await.map_err(|e| e.to_string())
+        Ok(tx.commit().await?)
     }
 
     async fn get_log_entries(&self) -> Result<Vec<String>> {
@@ -105,15 +106,15 @@ impl Db for SqliteDb {
         let query_str = "SELECT * FROM logs ORDER BY timestamp_secs, timestamp_nsecs, sequence";
         let mut rows = sqlx::query(query_str).fetch(&self.pool);
         let mut entries = vec![];
-        while let Some(row) = rows.try_next().await.map_err(|e| e.to_string())? {
-            let timestamp_secs: i64 = row.try_get("timestamp_secs").map_err(|e| e.to_string())?;
-            let timestamp_nsecs: i64 = row.try_get("timestamp_nsecs").map_err(|e| e.to_string())?;
-            let hostname: String = row.try_get("hostname").map_err(|e| e.to_string())?;
-            let level: i8 = row.try_get("level").map_err(|e| e.to_string())?;
-            let module: Option<String> = row.try_get("module").map_err(|e| e.to_string())?;
-            let filename: Option<String> = row.try_get("filename").map_err(|e| e.to_string())?;
-            let line: Option<i16> = row.try_get("line").map_err(|e| e.to_string())?;
-            let message: String = row.try_get("message").map_err(|e| e.to_string())?;
+        while let Some(row) = rows.try_next().await? {
+            let timestamp_secs: i64 = row.try_get("timestamp_secs")?;
+            let timestamp_nsecs: i64 = row.try_get("timestamp_nsecs")?;
+            let hostname: String = row.try_get("hostname")?;
+            let level: i8 = row.try_get("level")?;
+            let module: Option<String> = row.try_get("module")?;
+            let filename: Option<String> = row.try_get("filename")?;
+            let line: Option<i16> = row.try_get("line")?;
+            let message: String = row.try_get("message")?;
 
             entries.push(format!(
                 "{}.{} {} {} {} {}:{} {}",
@@ -131,8 +132,9 @@ impl Db for SqliteDb {
     }
 
     async fn put_log_entries(&self, entries: Vec<LogEntry<'_, '_>>) -> Result<()> {
-        let nentries = u64::try_from(entries.len())
-            .map_err(|e| format!("Cannot insert {} log entries at once: {}", entries.len(), e))?;
+        let nentries = u64::try_from(entries.len()).map_err(|e| {
+            anyhow::anyhow!("Cannot insert {} log entries at once: {}", entries.len(), e)
+        })?;
         if nentries == 0 {
             return Ok(());
         }
@@ -171,7 +173,10 @@ impl Db for SqliteDb {
             query = query
                 .bind(timestamp_secs)
                 .bind(timestamp_nsecs)
-                .bind(i64::try_from(sequence).map_err(|_| "sequence out of range".to_owned())?)
+                .bind(
+                    i64::try_from(sequence)
+                        .map_err(|_| anyhow::anyhow!("sequence out of range"))?,
+                )
                 .bind(entry.hostname)
                 .bind(u8::try_from(entry.level as usize).expect("Levels must fit in u8"))
                 .bind(module)
@@ -182,9 +187,9 @@ impl Db for SqliteDb {
             sequence += 1;
         }
 
-        let done = query.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        let done = query.execute(&self.pool).await?;
         if done.rows_affected() != nentries {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "Log entries insertion created {} rows but expected {}",
                 done.rows_affected(),
                 nentries
