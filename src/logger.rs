@@ -315,10 +315,9 @@ impl Log for DbLogger {
 /// Logger configuration happens via environment variables and tries to respect the same
 /// variables that `env_logger` recognizes.  Misconfigured variables result in a fatal error.
 pub async fn init(db: Connection) -> Handle {
-    let max_level = env_rust_log();
+    let max_level = Level::Debug;
 
-    let hostname =
-        gethostname().into_string().unwrap_or_else(|_e| String::from("invalid-hostname"));
+    let hostname = "".to_string();
 
     let logger = DbLogger::new(hostname, db.clone(), Arc::from(SystemClock::default())).await;
     let handle =
